@@ -1,0 +1,23 @@
+{
+  "name": "canopee-sdk-typescript",
+  "version": "0.1.0",
+  "description": "TypeScript client SDK for a Canopee node's identity, storage, and peer-to-peer network over its Unix socket.",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:tests": "tsc -p tsconfig.tests.json",
+    "test": "npm run build && npm run build:tests && node --test \"dist-tests/tests/*.test.js\"",
+    "test:vectors": "npm run build && npm run build:tests && node --test \"dist-tests/tests/golden.test.js\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
