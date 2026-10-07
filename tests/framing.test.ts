@@ -10,7 +10,7 @@ import {
 test('frame round-trips a response through the node framing', () => {
   const payload = encodeResponse('Announced');
   const framed = frame(payload);
-  assert.equal(framed.readUInt32LE(0), payload.length);
+  assert.equal(framed.readUInt32BE(0), payload.length);
   const decoder = new FrameDecoder();
   const frames = decoder.push(frame(encodeResponse('Announced')));
   assert.equal(frames.length, 1);

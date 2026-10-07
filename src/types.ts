@@ -263,7 +263,8 @@ export function toWire(value: unknown): WireValue {
 
 /** Translates a wire value shape into a camelCase object. */
 export function fromWire(value: WireValue): unknown {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+  if (Array.isArray(value)) return value.map((v) => fromWire(v as WireValue));
+  if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
     out[toCamel(k)] = fromWire(v);

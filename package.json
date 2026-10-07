@@ -9,8 +9,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:tests": "tsc -p tsconfig.tests.json",
-    "test": "npm run build && npm run build:tests && node --test \"dist-tests/tests/*.test.js\"",
+    "test": "npm run build && npm run build:tests && node --test \"dist-tests/tests/framing.test.js\" \"dist-tests/tests/golden.test.js\"",
     "test:vectors": "npm run build && npm run build:tests && node --test \"dist-tests/tests/golden.test.js\"",
+    "test:e2e": "npm run build && npm run build:tests && node --test \"dist-tests/tests/e2e.test.js\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

@@ -163,7 +163,7 @@ export class CanopeeClient {
   }
 
   async identity(): Promise<IdentityId> {
-    return (await this.request(this.cmd('Identity'), 'Identity')).identity_id;
+    return (await this.request(this.cmd('Identity'), 'Identity')).identityId;
   }
 
   async shutdown(): Promise<void> {

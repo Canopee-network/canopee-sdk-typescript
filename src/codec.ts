@@ -14,8 +14,9 @@
  *     orders HashMap entries arbitrarily, so SDKs sort keys to produce
  *     stable, reproducible bytes (the node reads back any order).
  *
- * A frame on the Unix socket is `u32 LE <payload-byte-length>` followed by
- * the payload bytes produced by this codec.
+ * A frame on the Unix socket is `u32 BE <payload-byte-length>` followed by
+ * the payload bytes produced by this codec (the node and Rust SDK use
+ * tokio's `write_u32`/`read_u32`, which are big-endian).
  *
  * The golden fixture `tests/fixtures/golden.json` (generated from the Rust
  * `canopee-sdk` crate) pins every encoder/decoder here to the exact bytes
@@ -389,6 +390,9 @@ export class Reader {
 
 export type WireValue = string | number | boolean | null | WireValue[] | { [k: string]: WireValue };
 
+/** snake_case → camelCase, used to accept user-shaped (camelCase) field keys. */
+const camelize = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+
 // ---------------------------------------------------------------------------
 // Encode
 // ---------------------------------------------------------------------------
@@ -423,8 +427,10 @@ class TypeCodec {
       }
       const obj = value as Record<string, WireValue>;
       for (const [fname, fkind] of fields) {
-        if (!(fname in obj)) throw new Error(`${path}.${fname}: missing field`);
-        encodeValue(w, fkind, obj[fname], `${path}.${fname}`);
+        const cname = camelize(fname);
+        if (!(fname in obj) && !(cname in obj)) throw new Error(`${path}.${fname}: missing field`);
+        const fv = (fname in obj ? obj[fname] : obj[cname]) ?? null;
+        encodeValue(w, fkind, fv, `${path}.${fname}`);
       }
       return;
     }
@@ -442,8 +448,9 @@ class TypeCodec {
     const data = (value as Record<string, WireValue>)[variant.name];
     const obj = data === null || data === undefined ? null : (data as Record<string, WireValue>);
     for (const [fname, fkind] of variant.fields) {
-      const fv = obj === null ? undefined : obj[fname];
-      encodeValue(w, fkind, fv ?? null, `${path}.${variant.name}.${fname}`);
+      const cname = camelize(fname);
+      const fv = (obj !== null && fname in obj ? obj[fname] : obj !== null && cname in obj ? obj[cname] : null);
+      encodeValue(w, fkind, fv, `${path}.${variant.name}.${fname}`);
     }
   }
 
@@ -759,10 +766,10 @@ export const encodeStruct = (name: string, value: WireValue): Buffer => {
 };
 export const decodeStruct = (name: string, buf: Buffer): WireValue => codecFor({ t: 'struct', name }).decode(new Reader(buf));
 
-/** Frames a payload the way the node's transport does: u32 LE length + payload. */
+/** Frames a payload the way the node's transport does: u32 BE length + payload. */
 export function frame(payload: Buffer): Buffer {
   const out = Buffer.alloc(4 + payload.length);
-  out.writeUInt32LE(payload.length, 0);
+  out.writeUInt32BE(payload.length, 0);
   payload.copy(out, 4);
   return out;
 }
@@ -775,7 +782,7 @@ export class FrameDecoder {
     this.buf = this.buf.length === 0 ? Buffer.from(chunk) : Buffer.concat([this.buf, chunk]);
     const frames: Buffer[] = [];
     while (this.buf.length >= 4) {
-      const len = this.buf.readUInt32LE(0);
+      const len = this.buf.readUInt32BE(0);
       if (this.buf.length < 4 + len) break;
       frames.push(Buffer.from(this.buf.subarray(4, 4 + len)));
       this.buf = Buffer.from(this.buf.subarray(4 + len));
