@@ -199,7 +199,7 @@ export class CanopeeClient {
   }
 
   async setHomeEntryShared(name: string, shared: boolean): Promise<boolean> {
-    await this.request(this.cmd('SetHomeEntryShared', { name, shared }), 'NameSet');
+    await this.request(this.cmd('SetHomeEntryShared', { name, shared }), 'HomeIndexSaved');
     return true;
   }
 
@@ -342,65 +342,102 @@ export class CanopeeClient {
 
   /**
    * Subscribes to a topic and yields {@link PubSubMessage}s until the socket
-   * closes (node shutdown) or the generator is disposed.
+   * closes (node shutdown) or the subscription is disposed via
+   * `iterator.return()` / `close()` (which destroy the socket and always
+   * complete promptly — an async generator parked on an internal await cannot
+   * be torn down with `return()`).
    */
-  async *subscribe(topic: string): AsyncGenerator<PubSubMessage> {
-    const sock = await connect(this.socketPath);
+  subscribe(topic: string): Subscription<PubSubMessage> {
+    let stream: net.Socket | undefined;
     const decoder = new FrameDecoder();
     const queue: Buffer[] = [];
-    let done = false;
+    let closed = false;
     let error: Error | null = null;
-    const wake: (() => void)[] = [];
-
-    const onData = (chunk: Buffer): void => {
-      for (const fr of decoder.push(chunk)) queue.push(fr);
-      kick();
-    };
-    const onEnd = (): void => {
-      done = true;
-      kick();
-    };
-    const onError = (e: Error): void => {
-      error = e;
-      done = true;
-      kick();
-    };
-    sock.on('data', onData);
-    sock.on('end', onEnd);
-    sock.on('error', onError);
+    let wake: (() => void) | undefined;
 
     const kick = (): void => {
-      for (const fn of wake.splice(0)) fn();
+      const fn = wake;
+      wake = undefined;
+      fn?.();
     };
+
     const nextFrame = async (): Promise<Buffer | undefined> => {
       while (true) {
         if (queue.length) return queue.shift();
-        if (done) return undefined;
-        await new Promise<void>((resolve) => wake.push(resolve));
+        if (closed) return undefined;
+        if (error) throw error;
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
         if (error) throw error;
       }
     };
 
-    try {
-      await writeFrame(sock, this.cmd('Subscribe', { topic }));
-      const first = await nextFrame();
-      if (!first) throw new CanopeeError('closed before Subscribed');
-      const value = decodeEnumVariants(NODE_RESPONSE, first);
-      if (typeof value !== 'string' || !value.endsWith('Subscribed')) {
-        throw new CanopeeError(`subscribe rejected: ${JSON.stringify(value)}`);
-      }
-      while (true) {
-        const fr = await nextFrame();
-        if (!fr) break;
-        const inner = unwrap(decodeEnumVariants(NODE_RESPONSE, fr), 'PubSub');
-        yield fromWire(inner) as unknown as PubSubMessage;
-      }
-    } finally {
-      sock.off('data', onData);
-      sock.off('end', onEnd);
-      sock.off('error', onError);
-      sock.destroy();
-    }
+    const ensureConnected = async (): Promise<void> => {
+      if (stream !== undefined) return;
+      stream = await connect(this.socketPath);
+      stream.on('data', (chunk) => {
+        for (const fr of decoder.push(chunk)) queue.push(fr);
+        kick();
+      });
+      stream.on('end', () => {
+        closed = true;
+        kick();
+      });
+      stream.on('error', (e: Error) => {
+        error = e;
+        closed = true;
+        kick();
+      });
+      await writeFrame(stream, this.cmd('Subscribe', { topic }));
+    };
+
+    const destroy = (): void => {
+      if (stream === undefined) return;
+      stream.destroy();
+      stream = undefined;
+    };
+
+    let acked = false;
+    const iterator = {
+      [Symbol.asyncIterator](): Subscription<PubSubMessage> {
+        return iterator;
+      },
+      next: async (): Promise<IteratorResult<PubSubMessage>> => {
+        await ensureConnected();
+        while (true) {
+          const fr = await nextFrame();
+          if (!fr) {
+            if (error !== null) throw error;
+            return { done: true, value: undefined as never };
+          }
+          const value = decodeEnumVariants(NODE_RESPONSE, fr);
+          if (!acked) {
+            const name =
+              typeof value === 'string' ? value : value !== null && typeof value === 'object' ? Object.keys(value)[0] : null;
+            if (name !== 'Subscribed') {
+              throw new CanopeeError(`subscribe rejected: ${JSON.stringify(value)}`);
+            }
+            acked = true;
+            continue;
+          }
+          const inner = unwrap(value, 'PubSub');
+          return { done: false, value: fromWire(inner) as unknown as PubSubMessage };
+        }
+      },
+      return: async (): Promise<IteratorResult<PubSubMessage>> => {
+        closed = true;
+        destroy();
+        kick();
+        return { done: true, value: undefined as never };
+      },
+      close: (): void => {
+        closed = true;
+        destroy();
+        kick();
+      },
+    };
+    return iterator;
   }
 
   // -------------------------------------------------------------------------
@@ -456,6 +493,15 @@ export class CanopeeClient {
     await this.request(this.cmd('StopServeSession'), 'ServeSessionStopped');
     return true;
   }
+}
+
+/** Result produced by {@link Client.subscribe}: an async iterator that also
+ * exposes `close()` for immediate disposal. */
+export interface Subscription<T> {
+  next(): Promise<IteratorResult<T>>;
+  return(value?: unknown): Promise<IteratorResult<T>>;
+  close(): void;
+  [Symbol.asyncIterator](): Subscription<T>;
 }
 
 // ---------------------------------------------------------------------------
